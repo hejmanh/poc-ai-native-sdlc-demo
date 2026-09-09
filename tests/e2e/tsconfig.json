@@ -1,0 +1,30 @@
+{
+  /**
+   * Editor-only config for the E2E specs; Playwright never type-checks them.
+   *
+   * DO NOT reference this from the root tsconfig.json. `npm run build` runs
+   * `tsc -b`, so wiring it in would let a broken spec break the app build.
+   */
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+
+    "baseUrl": "../..",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["**/*.ts"]
+}
