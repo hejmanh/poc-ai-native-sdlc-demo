@@ -3,11 +3,60 @@ import {
   test as base,
   expect,
   type BrowserContext,
+  type ConsoleMessage,
   type FrameLocator,
   type Page,
+  type Response,
 } from '@playwright/test';
 import { BROWSER_ARGS, profileDir, profileExists } from './browser-profile.js';
 import { APP_FRAME_SELECTOR, APP_URL } from './config.js';
+
+const MAX_DIAGNOSTIC_ENTRIES = 20;
+const MAX_DIAGNOSTIC_TEXT = 2_000;
+const SENSITIVE_QUERY_KEY = /token|secret|password|authorization|api[-_]?key|signature|sig|code/i;
+
+type HttpFailure = {
+  method: string;
+  status: number;
+  url: string;
+  response_preview?: string;
+};
+
+type AgentDiagnostics = {
+  http_failures: HttpFailure[];
+  console_errors: string[];
+  page_errors: string[];
+  current_url?: string;
+  pending: Promise<void>[];
+};
+
+function bounded(value: string): string {
+  return value.length <= MAX_DIAGNOSTIC_TEXT
+    ? value
+    : `${value.slice(0, MAX_DIAGNOSTIC_TEXT)}\n... [truncated]`;
+}
+
+function redactText(value: string): string {
+  return bounded(value)
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer <redacted>')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '<redacted-jwt>')
+    .replace(
+      /(token|secret|password|authorization|api[-_]?key)(\s*[=:]\s*)[^\s,;]+/gi,
+      '$1$2<redacted>',
+    );
+}
+
+function redactUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    for (const key of url.searchParams.keys()) {
+      if (SENSITIVE_QUERY_KEY.test(key)) url.searchParams.set(key, '<redacted>');
+    }
+    return bounded(url.toString());
+  } catch {
+    return redactText(value);
+  }
+}
 
 /** Page object for the deployed app. */
 export class AppPage {
@@ -57,6 +106,8 @@ export class AppPage {
 
 type AppFixtures = {
   appPage: AppPage;
+  /** Text-only evidence returned to the autonomous Test Agent on failure. */
+  agentDiagnostics: AgentDiagnostics;
 };
 
 type WorkerFixtures = {
@@ -97,6 +148,64 @@ export const test = base.extend<AppFixtures, WorkerFixtures>({
     await use(context.pages()[0] ?? (await context.newPage()));
   },
 
+  agentDiagnostics: [
+    async ({ page }, use) => {
+      const diagnostics: AgentDiagnostics = {
+        http_failures: [],
+        console_errors: [],
+        page_errors: [],
+        pending: [],
+      };
+
+      const onResponse = (response: Response) => {
+        if (response.status() < 400 || diagnostics.http_failures.length >= MAX_DIAGNOSTIC_ENTRIES) {
+          return;
+        }
+        const resourceType = response.request().resourceType();
+        if (!['document', 'fetch', 'xhr'].includes(resourceType)) return;
+
+        const item: HttpFailure = {
+          method: response.request().method(),
+          status: response.status(),
+          url: redactUrl(response.url()),
+        };
+        diagnostics.http_failures.push(item);
+
+        const captureBody = (async () => {
+          const contentType = response.headers()['content-type'] ?? '';
+          if (!/json|text|xml|odata/i.test(contentType)) return;
+          const body = await response.text().catch(() => '');
+          if (body) item.response_preview = redactText(body);
+        })();
+        diagnostics.pending.push(captureBody);
+      };
+
+      const onConsole = (message: ConsoleMessage) => {
+        if (!['error', 'warning'].includes(message.type())) return;
+        if (diagnostics.console_errors.length >= MAX_DIAGNOSTIC_ENTRIES) return;
+        const location = message.location();
+        const suffix = location.url
+          ? ` (${redactUrl(location.url)}:${location.lineNumber}:${location.columnNumber})`
+          : '';
+        diagnostics.console_errors.push(redactText(`${message.type()}: ${message.text()}${suffix}`));
+      };
+
+      const onPageError = (error: Error) => {
+        if (diagnostics.page_errors.length >= MAX_DIAGNOSTIC_ENTRIES) return;
+        diagnostics.page_errors.push(redactText(error.stack || error.message));
+      };
+
+      page.on('response', onResponse);
+      page.on('console', onConsole);
+      page.on('pageerror', onPageError);
+      await use(diagnostics);
+      page.off('response', onResponse);
+      page.off('console', onConsole);
+      page.off('pageerror', onPageError);
+    },
+    { auto: true },
+  ],
+
   /** Already navigated and rendered — specs start with the app mounted. */
   appPage: async ({ page }, use) => {
     const appPage = new AppPage(page);
@@ -112,8 +221,21 @@ export const test = base.extend<AppFixtures, WorkerFixtures>({
  * This is the failure context the reviewing agent gets; it cannot see the
  * screenshots Playwright writes alongside it.
  */
-test.afterEach(async ({ page }, testInfo) => {
+test.afterEach(async ({ page, agentDiagnostics }, testInfo) => {
   if (testInfo.status === testInfo.expectedStatus) return;
+
+  await Promise.allSettled(agentDiagnostics.pending);
+  agentDiagnostics.current_url = redactUrl(page.url());
+
+  await testInfo.attach('agent-diagnostics', {
+    body: JSON.stringify({
+      http_failures: agentDiagnostics.http_failures,
+      console_errors: agentDiagnostics.console_errors,
+      page_errors: agentDiagnostics.page_errors,
+      current_url: agentDiagnostics.current_url,
+    }),
+    contentType: 'application/json',
+  });
 
   const snapshot = await page
     .frameLocator(APP_FRAME_SELECTOR)
