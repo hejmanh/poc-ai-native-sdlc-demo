@@ -30,3 +30,10 @@ just created. Keep it short. Omit the Relationships line if there are none.
 ```
 
 ---
+
+## US-117912 — To Do App
+
+- **Tables:** asdlc_us117912_todo (ASDLC To Do)
+- **Columns:** asdlc_us117912_todo → asdlc_us117912_title (primary name, required), asdlc_us117912_notes (multiline text, optional), asdlc_us117912_duedate (date only, required), asdlc_us117912_iscompleted (boolean, default false)
+- **Notes:** Single flat table, user-owned, no relationships. Per-user isolation relies on standard Dataverse row ownership.
+
