@@ -1,0 +1,24 @@
+{
+  "version": "1.0",
+  "appId": null,
+  "appDisplayName": "ASDLC To Do App",
+  "region": "prod",
+  "environmentId": "0481c8d6-5203-4308-a186-824cdf4f517e",
+  "description": " ",
+  "buildPath": "./dist",
+  "buildEntryPoint": "index.html",
+  "localAppUrl": "http://localhost:3000",
+  "logoPath": "Default",
+  "connectionReferences": {},
+  "databaseReferences": {
+    "default.cds": {
+      "dataSources": {
+        "asdlctodos": {
+          "entitySetName": "asdlc_us117912_todos",
+          "logicalName": "asdlc_us117912_todo"
+        }
+      },
+      "environmentVariableName": ""
+    }
+  }
+}
